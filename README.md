@@ -12,6 +12,7 @@ bigpipe.BigPipe(app)
 
 @app.route('/')
 def root():
+
     bigpipe.scriptstring =  "\
                 <script>\
                      alert('my bigpipe')\
