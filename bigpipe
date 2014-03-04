@@ -1,0 +1,152 @@
+# -*- coding: utf-8 -*-
+from werkzeug.serving import WSGIRequestHandler as wsgi
+import socket
+from werkzeug.exceptions import InternalServerError
+import time
+
+#全局变量 用来存储一次bigpipe的socket
+
+sock = None
+
+#选择是否用bigpipe发送可用装饰器localselect装订来改变返回值 返回真则用bigpipe否则不用，默认也不用
+localselect_function = lambda : False
+
+#测试bigpipe发送
+scriptstring =  "\
+                <script>\
+                     alert('bigpipe')\
+                </script>\
+                "
+#装饰器 用于装饰是否用bigpipe的函数，装饰的函数返回真假
+def localselect(fn):
+    global localselect_function
+    global  isbigpipe
+    localselect_function = fn
+    
+#改变werkzeug的发送方式用来实现bigpipe
+def run_wsgi(self):
+        app = self.server.app
+        environ = self.make_environ()
+        headers_set = []
+        headers_sent = []
+        global sock
+        sock = self
+        def write(data):
+#            assert headers_set, 'write() before start_response'
+            if not headers_sent:
+                status, response_headers = headers_sent[:] = headers_set
+                code, msg = status.split(None, 1)
+                self.send_response(int(code), msg)
+                header_keys = set()
+                self.send_header('Transfer-Encoding', 'chunked')
+                for key, value in response_headers:
+                    if key.lower() == "content-length":
+                        if localselect_function():
+                            continue
+                    self.send_header(key, value)
+                    key = key.lower()
+                    header_keys.add(key)
+                
+                if not localselect_function() :
+                    if 'content-length' not in header_keys:
+                        self.close_connection = True
+                        self.send_header('Connection', 'close')
+                if 'server' not in header_keys:
+                    self.send_header('Server', self.version_string())
+                if 'date' not in header_keys:
+                    self.send_header('Date', self.date_time_string())
+                self.end_headers()
+
+            assert type(data) is str, 'applications must write bytes'
+            self.wfile.write(data)
+            self.wfile.flush()
+
+        def start_response(status, response_headers, exc_info=None):
+            if exc_info:
+                try:
+                    if headers_sent:
+                        raise exc_info[0], exc_info[1], exc_info[2]
+                finally:
+                    exc_info = None
+            elif headers_set:
+                raise AssertionError('Headers already set')
+            headers_set[:] = [status, response_headers]
+            return write
+
+        def execute(app):
+            application_iter = app(environ, start_response)
+            try:
+                for data in application_iter:
+                    write(data)
+                # make sure the headers are sent
+                if not headers_sent:
+                    write('')
+                while localselect_function():
+                    send_script()
+                    break   
+            except Exception,e:
+                print "execute",e
+            finally:
+                if hasattr(application_iter, 'close'):
+                    application_iter.close()
+                application_iter = None
+
+        try:
+            execute(app)
+        except (socket.error, socket.timeout), e:
+            self.connection_dropped(e, environ)
+        except Exception:
+            if self.server.passthrough_errors:
+                raise
+            from werkzeug.debug.tbtools import get_current_traceback
+            traceback = get_current_traceback(ignore_system_exceptions=True)
+            try:
+                # if we haven't yet sent the headers but they are set
+                # we roll back to be able to set them again.
+                if not headers_sent:
+                    del headers_set[:]
+                execute(InternalServerError())
+            except Exception:
+                pass
+            self.server.log('error', 'Error on request:\n%s',
+                            traceback.plaintext)
+wsgi.run_wsgi = run_wsgi
+
+#发送script的函数
+def send_script():    
+    time.sleep(3)
+    global sock
+    global scriptstring
+    global isbigpipe
+    try:
+        sock.wfile.write(scriptstring)
+        sock.wfile.flush()
+        sock.wfile.close()
+        sock.rfile.close()
+    except Exception,e:
+        print "send_script",e
+    finally:
+        init_scriptstring()
+        
+#用户用来返回script
+def newscript(argscript):
+    global scriptstring
+    scriptstring = argscript
+ 
+#初始化scriptstring
+def init_scriptstring():
+    global scriptstring
+    scriptstring =  "\
+                <script>\
+                     alert('bigpipe')\
+                </script>\
+                "
+    
+#初始化localselect_function
+def init_localselect_function():
+    global localselect_function
+    localselect_function = lambda : False
+    
+#用来修饰Flask的app,表示使用bigpipe
+def BigPipe(app):
+    wsgi.run_wsgi = run_wsgi
