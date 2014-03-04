@@ -32,7 +32,7 @@ def run_wsgi(self):
         global sock
         sock = self
         def write(data):
-#            assert headers_set, 'write() before start_response'
+            assert headers_set, 'write() before start_response'
             if not headers_sent:
                 status, response_headers = headers_sent[:] = headers_set
                 code, msg = status.split(None, 1)
