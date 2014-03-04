@@ -8,6 +8,7 @@ example:
 import bigpipe
 
 app = Flask('website')
+
 bigpipe.BigPipe(app)
 
 @app.route('/')
